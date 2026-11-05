@@ -29,7 +29,7 @@ const state = vi.hoisted(() => ({
 const db = vi.hoisted(() => ({
   bug: { findFirst: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
   bugRevision: { findMany: vi.fn() },
-  bugActivity: { create: vi.fn() },
+  bugActivity: { create: vi.fn(), findFirst: vi.fn(async (): Promise<{ id: string } | null> => null) },
   issueConfirmation: { findUnique: vi.fn(), upsert: vi.fn(), findMany: vi.fn() },
   pointEntry: { createMany: vi.fn() },
   confirmationPenalty: { findMany: vi.fn(async () => []) },
@@ -408,6 +408,17 @@ describe("the owner's answer to a close by votes (#your-decisions)", () => {
     expect((await rejection(agreeWithClose(ada, "p1", "7"))).status).toBe(409);
     state.bug = { ...state.bug, status: "closed", substatus: "closed", closeReason: "withdrawn" };
     expect((await rejection(appealClose(ada, "p1", "7", appeal))).status).toBe(409);
+    expect(db.comment.create).not.toHaveBeenCalled();
+  });
+
+  it("takes one appeal per issue: a second close by votes is final", async () => {
+    db.bugActivity.findFirst.mockResolvedValueOnce({ id: "act1" });
+    const error = await rejection(appealClose(ada, "p1", "7", appeal));
+    expect(error.status).toBe(409);
+    expect(db.bugActivity.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { bugId: "bug1", type: "status_changed", metadata: { path: ["via"], equals: "appealed" } },
+    }));
+    expect(state.bug.status).toBe("closed");
     expect(db.comment.create).not.toHaveBeenCalled();
   });
 

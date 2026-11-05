@@ -108,7 +108,7 @@ import { BackToList } from "@/components/back-to-list";
 import { issueNextStep } from "@/lib/next-step";
 import { staleHold, type StaleHold } from "@/lib/agent-api/stale-hold";
 import { senseCheck } from "@/lib/agent-api/abandon";
-import { closeSuggestionsFor, type CloseSuggestionsData } from "@/lib/agent-api/close-suggestions";
+import { closeSuggestionsFor, hasAppealed, type CloseSuggestionsData } from "@/lib/agent-api/close-suggestions";
 import { CloseSuggestionsPanel } from "@/components/close-suggestions";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { withdrawIssueAction } from "@/app/actions/withdraw-issue";
@@ -936,6 +936,9 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
         suggestions: closeSuggestions.entries,
         threshold: closeSuggestions.threshold,
         decidedAt: bug.closedAt,
+        appealedBefore: bug.status === "closed" && ownsIssue(bug, user.id)
+          ? await loadOptional("appeal history", false, () => hasAppealed(bug.id))
+          : false,
       })
     : null;
   // The judgements as the Delivered rule counts them (independent, weighted, on

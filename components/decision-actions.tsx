@@ -7,9 +7,9 @@ import { agreeWithCloseAction, appealCloseAction } from "@/app/actions/your-deci
 /**
  * The decision card's answers (#your-decisions): "Respond or appeal" opens a
  * box for the owner's side and evidence, which reopens the vote; "I agree"
- * accepts the close.
+ * accepts the close. An issue takes one appeal; after that only "I agree" is left.
  */
-export function DecisionActions({ issueId }: { issueId: string }) {
+export function DecisionActions({ issueId, canAppeal }: { issueId: string; canAppeal: boolean }) {
   const router = useRouter();
   const [appealing, setAppealing] = useState(false);
   const [evidence, setEvidence] = useState("");
@@ -70,13 +70,15 @@ export function DecisionActions({ issueId }: { issueId: string }) {
   return (
     <div className="mt-3">
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setAppealing(true)}
-          className="rounded-full bg-zk-accent px-3.5 py-1.5 text-[13px] font-bold text-white hover:opacity-90"
-        >
-          Respond or appeal
-        </button>
+        {canAppeal ? (
+          <button
+            type="button"
+            onClick={() => setAppealing(true)}
+            className="rounded-full bg-zk-accent px-3.5 py-1.5 text-[13px] font-bold text-white hover:opacity-90"
+          >
+            Respond or appeal
+          </button>
+        ) : null}
         <button
           type="button"
           disabled={pending}
@@ -85,7 +87,11 @@ export function DecisionActions({ issueId }: { issueId: string }) {
         >
           I agree
         </button>
-        <span className="text-[12px] text-zk-muted">An appeal reopens the vote with your evidence attached.</span>
+        <span className="text-[12px] text-zk-muted">
+          {canAppeal
+            ? "An appeal reopens the vote with your evidence attached. Each issue takes one appeal."
+            : "You appealed this issue once already, so this decision is final."}
+        </span>
       </div>
       {error ? <p role="alert" className="m-0 mt-2 text-[13px] text-zk-bad-fg">{error}</p> : null}
     </div>

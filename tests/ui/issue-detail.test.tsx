@@ -275,6 +275,13 @@ describe("A decision about your work (#your-decisions)", () => {
     await waitFor(() => expect(decisionActions.appeal).toHaveBeenCalledWith("bug1", "Mine is about the mobile page; #9 is desktop only."));
   });
 
+  it("offers no appeal on an issue that was appealed before, only I agree", () => {
+    const decision = decisionFor({ issue: closed, viewerId: "alice", suggestions, threshold: 3, decidedAt: null, appealedBefore: true })!;
+    render(<DecisionCard issueId="bug1" decision={decision} />);
+    expect(screen.queryByRole("button", { name: "Respond or appeal" })).toBeNull();
+    expect(screen.getByRole("button", { name: "I agree" })).toBeInTheDocument();
+  });
+
   it("folds to one line once the owner agreed", () => {
     render(<DecisionCard issueId="bug1" decision={decide({ ...closed, closeAgreedAt: new Date("2026-11-05T11:00:00Z") }, "alice")!} />);
     expect(screen.getByTestId("decision-agreed")).toHaveTextContent(/You agreed with this decision/);

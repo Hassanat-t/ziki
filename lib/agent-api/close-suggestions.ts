@@ -490,10 +490,23 @@ export async function reopenIssue(agent: AgentContext, projectId: string, issueR
   return result;
 }
 
-/** Who withdraws an issue: a person, through one of their agents or in the web app. */
+/**
+ * Whether the owner has appealed a close on this issue before (#your-decisions).
+ * An issue takes one appeal: once an appeal has reopened it, a later close by
+ * votes is final, so voters are not asked to vote on the same close again and again.
+ */
+export async function hasAppealed(bugId: string, db: Db = prisma): Promise<boolean> {
+  const appeal = await db.bugActivity.findFirst({
+    where: { bugId, type: "status_changed", metadata: { path: ["via"], equals: "appealed" } },
+    select: { id: true },
+  });
+  return appeal !== null;
+}
+
+/** The issue's owner (its reporter or the person it is for), answering a close in the web app (#your-decisions). */
 export type IssueOwner = { tenantId: string; userId: string };
 
-/** The closed issue the owner may answer: closed by votes, not withdrawn, and theirs (404 otherwise). */
+/** The closed issue the owner may answer: theirs (403 otherwise), and closed by other members' votes (409 otherwise). */
 async function ownersClosedIssue(tx: Prisma.TransactionClient, owner: IssueOwner, bugId: string) {
   const fresh = await lockedRow(tx, bugId);
   if (!ownsIssue(fresh, owner.userId)) throw new IssueApiError(403, "Only the person this issue belongs to can answer its close.", { error: "not_owner" });
@@ -514,12 +527,17 @@ async function ownersClosedIssue(tx: Prisma.TransactionClient, owner: IssueOwner
  * confirmed), a duplicate link is cleared, and the suggestions for the
  * reason it closed with are removed, so closing it again takes a fresh vote.
  * The owner's evidence is posted as a comment on the issue for the voters to
- * weigh, and recorded with the status change.
+ * weigh, and recorded with the status change. One appeal per issue
+ * (`hasAppealed`): a second is 409 already_appealed.
  */
 export async function appealClose(owner: IssueOwner, projectId: string, issueRef: string, input: z.infer<typeof appealCloseSchema>) {
   const bug = await issueInProject(owner.tenantId, projectId, issueRef);
   const result = await prisma.$transaction(async (tx) => {
     const fresh = await ownersClosedIssue(tx, owner, bug.id);
+    if (await hasAppealed(bug.id, tx)) {
+      const message = "This issue was appealed once already, so this close is final.";
+      throw new IssueApiError(409, message, { error: "already_appealed", message });
+    }
     const to: Substatus = (await isConfirmed(bug.id, tx)) ? "open" : "requires_confirmation";
     const previousReason = fresh.closeReason;
     await tx.bug.update({
@@ -592,6 +610,7 @@ export async function agreeWithClose(owner: IssueOwner, projectId: string, issue
   });
 }
 
+/** Who withdraws an issue: a person, through one of their agents or in the web app. */
 export type IssueWithdrawer = { tenantId: string; userId: string; agentId: string | null; agentName: string | null };
 
 /**

@@ -26,6 +26,8 @@ export type YourDecision = {
   decidedAt: Date | string | null;
   /** When the owner said they agree with it; the card folds away. */
   agreedAt: Date | string | null;
+  /** False once the issue was appealed before: an issue takes one appeal, so this close is final. */
+  canAppeal: boolean;
 };
 
 export type DecisionIssue = {
@@ -71,6 +73,8 @@ export function decisionFor(input: {
   suggestions: readonly DecisionSuggestion[];
   threshold: number;
   decidedAt: Date | string | null;
+  /** The owner appealed an earlier close of this issue. */
+  appealedBefore?: boolean;
 }): YourDecision | null {
   const { issue, viewerId } = input;
   if (issue.isDeleted || issue.status !== "closed" || !issue.closeReason || issue.closeReason === "withdrawn") return null;
@@ -89,6 +93,7 @@ export function decisionFor(input: {
     evidence: issue.closeEvidence ?? others[0].evidence,
     decidedAt: input.decidedAt,
     agreedAt: issue.closeAgreedAt ?? null,
+    canAppeal: !input.appealedBefore,
   };
 }
 
