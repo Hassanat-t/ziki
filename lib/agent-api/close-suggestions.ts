@@ -497,7 +497,11 @@ export type IssueOwner = { tenantId: string; userId: string };
 async function ownersClosedIssue(tx: Prisma.TransactionClient, owner: IssueOwner, bugId: string) {
   const fresh = await lockedRow(tx, bugId);
   if (!ownsIssue(fresh, owner.userId)) throw new IssueApiError(403, "Only the person this issue belongs to can answer its close.", { error: "not_owner" });
-  if (fresh.status !== "closed" || !fresh.closeReason || fresh.closeReason === "withdrawn") {
+  // Closed by votes means someone other than the owner suggested the reason it closed with (#your-decisions).
+  const othersVoted = fresh.status === "closed" && fresh.closeReason && fresh.closeReason !== "withdrawn"
+    ? await tx.closeSuggestion.count({ where: { bugId, reason: fresh.closeReason, onBehalfOfUserId: { not: owner.userId } } })
+    : 0;
+  if (othersVoted === 0) {
     const message = "Only an issue closed by other members' votes can be appealed or agreed with.";
     throw new IssueApiError(409, message, { error: "not_appealable", message, status: fresh.status, closeReason: fresh.closeReason });
   }

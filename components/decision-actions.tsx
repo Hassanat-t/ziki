@@ -42,7 +42,7 @@ export function DecisionActions({ issueId }: { issueId: string }) {
           onChange={(event) => setEvidence(event.target.value)}
           rows={3}
           required
-          placeholder="Why it isn't a duplicate: what's different, a link, a request id…"
+          placeholder="Why the decision is wrong: what they missed, a link, a screenshot, a request id…"
           className="w-full rounded-xl border border-zk-border bg-zk-surface px-3 py-2 text-[13px] text-zk-text"
         />
         <div className="flex flex-wrap items-center gap-2">

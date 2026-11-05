@@ -37,6 +37,7 @@ const db = vi.hoisted(() => ({
     findUnique: vi.fn(async () => null),
     upsert: vi.fn(async () => ({})),
     aggregate: vi.fn(),
+    count: vi.fn(async () => 2),
     findMany: vi.fn(async () => [{ onBehalfOfUserId: "cara" }, { onBehalfOfUserId: "bob" }]),
     deleteMany: vi.fn(async () => ({ count: 2 })),
   },
@@ -407,6 +408,13 @@ describe("the owner's answer to a close by votes (#your-decisions)", () => {
     expect((await rejection(agreeWithClose(ada, "p1", "7"))).status).toBe(409);
     state.bug = { ...state.bug, status: "closed", substatus: "closed", closeReason: "withdrawn" };
     expect((await rejection(appealClose(ada, "p1", "7", appeal))).status).toBe(409);
+    expect(db.comment.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses an appeal when nobody but the owner voted for the reason it closed with", async () => {
+    db.closeSuggestion.count.mockResolvedValueOnce(0);
+    expect((await rejection(appealClose(ada, "p1", "7", appeal))).status).toBe(409);
+    expect(db.closeSuggestion.count).toHaveBeenCalledWith({ where: { bugId: "bug1", reason: "duplicate", onBehalfOfUserId: { not: "ada" } } });
     expect(db.comment.create).not.toHaveBeenCalled();
   });
 });
