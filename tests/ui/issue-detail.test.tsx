@@ -9,8 +9,8 @@ const mocks = vi.hoisted(() => ({ addComment: vi.fn() }));
 vi.mock("@/app/actions/issues", () => ({ addCommentAction: mocks.addComment }));
 vi.mock("@/app/actions/issue-bids", () => ({ awardIssueBidAction: vi.fn() }));
 vi.mock("@/app/actions/confirmations", () => ({ giveConfirmationAction: vi.fn() }));
-const decisionActions = vi.hoisted(() => ({ appeal: vi.fn(async () => ({ ok: true as const })), agree: vi.fn(async () => ({ ok: true as const })) }));
-vi.mock("@/app/actions/your-decision", () => ({ appealCloseAction: decisionActions.appeal, agreeWithCloseAction: decisionActions.agree }));
+const decisionActions = vi.hoisted(() => ({ respond: vi.fn(async () => ({ ok: true as const })), agree: vi.fn(async () => ({ ok: true as const })) }));
+vi.mock("@/app/actions/your-decision", () => ({ respondToCloseAction: decisionActions.respond, agreeWithCloseAction: decisionActions.agree }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }), usePathname: () => "/demo/1", useSearchParams: () => new URLSearchParams() }));
 
 import { MergeReviewsPanel, TestVerdictsPanel, type MergeReviewView, type TestVerdictView } from "@/components/issue-review-entries";
@@ -264,22 +264,23 @@ describe("A decision about your work (#your-decisions)", () => {
     expect(decide(closed, "alice", [vote("alice", "Alice", 3)])).toBeNull();
   });
 
-  it("sends the owner's appeal with their evidence, or their agreement", async () => {
+  it("sends the owner's reply with their evidence, or their agreement", async () => {
     const user = userEvent.setup({ delay: null });
     render(<DecisionCard issueId="bug1" decision={decide(closed, "alice")!} />);
     await user.click(screen.getByRole("button", { name: "I agree" }));
     expect(decisionActions.agree).toHaveBeenCalledWith("bug1");
     await user.click(screen.getByRole("button", { name: "Respond or appeal" }));
     await user.type(screen.getByLabelText(/Your side/), "Mine is about the mobile page; #9 is desktop only.");
-    await user.click(screen.getByRole("button", { name: "Send appeal" }));
-    await waitFor(() => expect(decisionActions.appeal).toHaveBeenCalledWith("bug1", "Mine is about the mobile page; #9 is desktop only."));
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(decisionActions.respond).toHaveBeenCalledWith("bug1", "Mine is about the mobile page; #9 is desktop only."));
   });
 
-  it("offers no appeal on an issue that was appealed before, only I agree", () => {
-    const decision = decisionFor({ issue: closed, viewerId: "alice", suggestions, threshold: 3, decidedAt: null, appealedBefore: true })!;
-    render(<DecisionCard issueId="bug1" decision={decision} />);
-    expect(screen.queryByRole("button", { name: "Respond or appeal" })).toBeNull();
-    expect(screen.getByRole("button", { name: "I agree" })).toBeInTheDocument();
+  it("says a manager can reopen only a not-reproducible close", async () => {
+    const user = userEvent.setup({ delay: null });
+    const notReproducible = decide({ ...closed, closeReason: "not_reproducible", duplicateOf: null }, "alice", [vote("cara", "Cara", 3, "not_reproducible")])!;
+    render(<DecisionCard issueId="bug1" decision={notReproducible} />);
+    await user.click(screen.getByRole("button", { name: "Respond or appeal" }));
+    expect(screen.getByText(/A manager can reopen it with your fresh reproduction/)).toBeInTheDocument();
   });
 
   it("folds to one line once the owner agreed", () => {

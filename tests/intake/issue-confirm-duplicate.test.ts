@@ -29,7 +29,7 @@ const state = vi.hoisted(() => ({
 const db = vi.hoisted(() => ({
   bug: { findFirst: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
   bugRevision: { findMany: vi.fn() },
-  bugActivity: { create: vi.fn(), findFirst: vi.fn(async (): Promise<{ id: string } | null> => null) },
+  bugActivity: { create: vi.fn() },
   issueConfirmation: { findUnique: vi.fn(), upsert: vi.fn(), findMany: vi.fn() },
   pointEntry: { createMany: vi.fn() },
   confirmationPenalty: { findMany: vi.fn(async () => []) },
@@ -39,7 +39,6 @@ const db = vi.hoisted(() => ({
     aggregate: vi.fn(),
     count: vi.fn(async () => 2),
     findMany: vi.fn(async () => [{ onBehalfOfUserId: "cara" }, { onBehalfOfUserId: "bob" }]),
-    deleteMany: vi.fn(async () => ({ count: 2 })),
   },
   comment: { create: vi.fn(async () => ({ id: "comment1" })) },
   user: { findUnique: vi.fn(async () => ({ name: "Ada" })) },
@@ -57,7 +56,7 @@ const notifyLater = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notifyLater }));
 
 import { giveConfirmation, isConfirmed, openConfirmedIssue } from "@/lib/agent-api/confirmations";
-import { agreeWithClose, appealClose, suggestClose } from "@/lib/agent-api/close-suggestions";
+import { agreeWithClose, respondToClose, suggestClose } from "@/lib/agent-api/close-suggestions";
 import { workflowFor } from "@/lib/workflow";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import { DUPLICATE_ERRORS, duplicateLinkProblem } from "@/lib/duplicates";
@@ -374,7 +373,7 @@ describe("telling the owner about a close by votes (#your-decisions)", () => {
 
 describe("the owner's answer to a close by votes (#your-decisions)", () => {
   const ada = { tenantId: "t1", userId: "ada" };
-  const appeal = { evidence: "#3 is about the desktop app; this is the mobile page, with its own screenshot." };
+  const reply = { evidence: "#3 is about the desktop app; this is the mobile page, with its own screenshot." };
 
   beforeEach(() => {
     state.bug = bugRow({
@@ -383,48 +382,28 @@ describe("the owner's answer to a close by votes (#your-decisions)", () => {
     });
   });
 
-  it("reopens the vote on the owner's appeal: back to Open, no duplicate link, the old votes cleared, the evidence posted and the voters told", async () => {
-    state.entries = [
-      { id: "c1", bugId: "bug1", onBehalfOfUserId: "x", agentId: null, weightClass: "working", verdict: "confirm", summary: "", description: "", duplicateOfId: null, undoneAt: null, createdAt: new Date(), updatedAt: new Date() },
-      { id: "c2", bugId: "bug1", onBehalfOfUserId: "y", agentId: null, weightClass: "working", verdict: "confirm", summary: "", description: "", duplicateOfId: null, undoneAt: null, createdAt: new Date(), updatedAt: new Date() },
-    ];
-    const result = await appealClose(ada, "p1", "7", appeal);
-    expect(result.substatus).toBe("open");
-    expect(state.bug).toMatchObject({ status: "open", closeReason: null, duplicateOfId: null, closeAgreedAt: null });
-    expect(db.closeSuggestion.deleteMany).toHaveBeenCalledWith({ where: { bugId: "bug1", reason: "duplicate" } });
-    expect(db.comment.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ authorId: "ada", body: appeal.evidence }) }));
+  it("posts the owner's reply and tells the voters, leaving the close as it is", async () => {
+    await respondToClose(ada, "p1", "7", reply);
+    expect(db.comment.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ authorId: "ada", body: reply.evidence }) }));
     expect(notifyLater).toHaveBeenCalledWith(expect.objectContaining({ kind: "comment_added", actorId: "ada", recipientIds: ["cara", "bob"] }));
-  });
-
-  it("goes back to Requires confirmation when the issue was never confirmed", async () => {
-    expect((await appealClose(ada, "p1", "7", appeal)).substatus).toBe("requires_confirmation");
+    expect(state.bug).toMatchObject({ status: "closed", closeReason: "duplicate", duplicateOfId: "bug0" });
+    expect(db.bug.update).not.toHaveBeenCalled();
   });
 
   it("records the owner's agreement, and refuses anyone else, an open issue or a withdrawal", async () => {
     await agreeWithClose(ada, "p1", "7");
     expect(state.bug.closeAgreedAt).toBeInstanceOf(Date);
-    expect((await rejection(appealClose({ tenantId: "t1", userId: "bob" }, "p1", "7", appeal))).status).toBe(403);
+    expect((await rejection(respondToClose({ tenantId: "t1", userId: "bob" }, "p1", "7", reply))).status).toBe(403);
     state.bug = { ...state.bug, status: "open", substatus: "open", closeReason: null };
     expect((await rejection(agreeWithClose(ada, "p1", "7"))).status).toBe(409);
     state.bug = { ...state.bug, status: "closed", substatus: "closed", closeReason: "withdrawn" };
-    expect((await rejection(appealClose(ada, "p1", "7", appeal))).status).toBe(409);
+    expect((await rejection(respondToClose(ada, "p1", "7", reply))).status).toBe(409);
     expect(db.comment.create).not.toHaveBeenCalled();
   });
 
-  it("takes one appeal per issue: a second close by votes is final", async () => {
-    db.bugActivity.findFirst.mockResolvedValueOnce({ id: "act1" });
-    const error = await rejection(appealClose(ada, "p1", "7", appeal));
-    expect(error.status).toBe(409);
-    expect(db.bugActivity.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: { bugId: "bug1", type: "status_changed", metadata: { path: ["via"], equals: "appealed" } },
-    }));
-    expect(state.bug.status).toBe("closed");
-    expect(db.comment.create).not.toHaveBeenCalled();
-  });
-
-  it("refuses an appeal when nobody but the owner voted for the reason it closed with", async () => {
+  it("refuses a reply when nobody but the owner voted for the reason it closed with", async () => {
     db.closeSuggestion.count.mockResolvedValueOnce(0);
-    expect((await rejection(appealClose(ada, "p1", "7", appeal))).status).toBe(409);
+    expect((await rejection(respondToClose(ada, "p1", "7", reply))).status).toBe(409);
     expect(db.closeSuggestion.count).toHaveBeenCalledWith({ where: { bugId: "bug1", reason: "duplicate", onBehalfOfUserId: { not: "ada" } } });
     expect(db.comment.create).not.toHaveBeenCalled();
   });

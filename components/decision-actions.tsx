@@ -2,14 +2,14 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { agreeWithCloseAction, appealCloseAction } from "@/app/actions/your-decision";
+import { agreeWithCloseAction, respondToCloseAction } from "@/app/actions/your-decision";
 
 /**
  * The decision card's answers (#your-decisions): "Respond or appeal" opens a
- * box for the owner's side and evidence, which reopens the vote; "I agree"
- * accepts the close. An issue takes one appeal; after that only "I agree" is left.
+ * box for the owner's side and evidence, posted as a comment the voters are
+ * told about; "I agree" accepts the close.
  */
-export function DecisionActions({ issueId, canAppeal }: { issueId: string; canAppeal: boolean }) {
+export function DecisionActions({ issueId, reopenable }: { issueId: string; reopenable: boolean }) {
   const router = useRouter();
   const [appealing, setAppealing] = useState(false);
   const [evidence, setEvidence] = useState("");
@@ -30,7 +30,7 @@ export function DecisionActions({ issueId, canAppeal }: { issueId: string; canAp
         className="mt-3 flex flex-col gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          send(() => appealCloseAction(issueId, evidence));
+          send(() => respondToCloseAction(issueId, evidence));
         }}
       >
         <label htmlFor="decision-appeal" className="text-[13px] font-semibold text-zk-text">
@@ -51,7 +51,7 @@ export function DecisionActions({ issueId, canAppeal }: { issueId: string; canAp
             disabled={pending || !evidence.trim()}
             className="rounded-full bg-zk-accent px-3.5 py-1.5 text-[13px] font-bold text-white hover:opacity-90 disabled:opacity-50"
           >
-            {pending ? "Sending…" : "Send appeal"}
+            {pending ? "Sending…" : "Send"}
           </button>
           <button
             type="button"
@@ -60,7 +60,11 @@ export function DecisionActions({ issueId, canAppeal }: { issueId: string; canAp
           >
             Cancel
           </button>
-          <span className="text-[12px] text-zk-muted">It reopens the issue for a fresh vote, and the voters see your evidence.</span>
+          <span className="text-[12px] text-zk-muted">
+            {reopenable
+              ? "Posted on the issue; the voters are told. A manager can reopen it with your fresh reproduction."
+              : "Posted on the issue as a comment; everyone who voted is told."}
+          </span>
         </div>
         {error ? <p role="alert" className="m-0 text-[13px] text-zk-bad-fg">{error}</p> : null}
       </form>
@@ -70,15 +74,13 @@ export function DecisionActions({ issueId, canAppeal }: { issueId: string; canAp
   return (
     <div className="mt-3">
       <div className="flex flex-wrap items-center gap-2">
-        {canAppeal ? (
-          <button
-            type="button"
-            onClick={() => setAppealing(true)}
-            className="rounded-full bg-zk-accent px-3.5 py-1.5 text-[13px] font-bold text-white hover:opacity-90"
-          >
-            Respond or appeal
-          </button>
-        ) : null}
+        <button
+          type="button"
+          onClick={() => setAppealing(true)}
+          className="rounded-full bg-zk-accent px-3.5 py-1.5 text-[13px] font-bold text-white hover:opacity-90"
+        >
+          Respond or appeal
+        </button>
         <button
           type="button"
           disabled={pending}
@@ -87,11 +89,7 @@ export function DecisionActions({ issueId, canAppeal }: { issueId: string; canAp
         >
           I agree
         </button>
-        <span className="text-[12px] text-zk-muted">
-          {canAppeal
-            ? "An appeal reopens the vote with your evidence attached. Each issue takes one appeal."
-            : "You appealed this issue once already, so this decision is final."}
-        </span>
+        <span className="text-[12px] text-zk-muted">Your evidence goes to everyone who voted.</span>
       </div>
       {error ? <p role="alert" className="m-0 mt-2 text-[13px] text-zk-bad-fg">{error}</p> : null}
     </div>

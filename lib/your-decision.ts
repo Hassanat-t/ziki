@@ -1,4 +1,4 @@
-import { closeReasonLabel, ownsIssue } from "@/lib/close-reasons";
+import { closeReasonLabel, isReopenable, ownsIssue } from "@/lib/close-reasons";
 import { formatIssueNumber } from "@/lib/issue-number";
 
 /**
@@ -6,7 +6,7 @@ import { formatIssueNumber } from "@/lib/issue-number";
  * members' votes close an issue, the person it belongs to (its reporter, or
  * the person it is for) sees on the issue what was decided, who decided it,
  * why and with what evidence, is told by a notification, and can agree or
- * appeal, which reopens the vote with their evidence attached. Kept free of
+ * answer it with their evidence, which the voters are told about. Kept free of
  * database imports so the page and the close path can both use it.
  */
 
@@ -26,8 +26,8 @@ export type YourDecision = {
   decidedAt: Date | string | null;
   /** When the owner said they agree with it; the card folds away. */
   agreedAt: Date | string | null;
-  /** False once the issue was appealed before: an issue takes one appeal, so this close is final. */
-  canAppeal: boolean;
+  /** Only a not-reproducible close can be reopened, by a manager agent with a fresh reproduction. */
+  reopenable: boolean;
 };
 
 export type DecisionIssue = {
@@ -73,8 +73,6 @@ export function decisionFor(input: {
   suggestions: readonly DecisionSuggestion[];
   threshold: number;
   decidedAt: Date | string | null;
-  /** The owner appealed an earlier close of this issue. */
-  appealedBefore?: boolean;
 }): YourDecision | null {
   const { issue, viewerId } = input;
   if (issue.isDeleted || issue.status !== "closed" || !issue.closeReason || issue.closeReason === "withdrawn") return null;
@@ -93,7 +91,7 @@ export function decisionFor(input: {
     evidence: issue.closeEvidence ?? others[0].evidence,
     decidedAt: input.decidedAt,
     agreedAt: issue.closeAgreedAt ?? null,
-    canAppeal: !input.appealedBefore,
+    reopenable: isReopenable(issue.closeReason),
   };
 }
 
@@ -112,6 +110,6 @@ export function decisionNote(input: {
   const tally = input.votes !== undefined && input.threshold !== undefined ? ` by ${input.votes} of ${input.threshold} votes` : "";
   const lines = [`${decisionHeadline(input.reason, input.duplicateOf)}${tally}.`];
   if (input.evidence) lines.push(`Evidence: ${input.evidence}`);
-  lines.push("Open the issue to see who decided and why. If you disagree, appeal there with your evidence: it reopens the vote.");
+  lines.push("Open the issue to see who decided and why. If you disagree, respond there with your evidence: the voters are told.");
   return lines.join("\n");
 }

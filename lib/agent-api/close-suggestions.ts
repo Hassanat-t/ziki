@@ -90,8 +90,8 @@ export const closeIssueSchema = z
 
 /** The fresh reproduction that reopens an issue closed as not reproducible, e.g. a new request id. */
 export const reopenIssueSchema = z.object({ evidence: evidenceField }).strict();
-/** The owner's appeal against a close by votes (#your-decisions): their side, with the evidence. */
-export const appealCloseSchema = z.object({ evidence: evidenceField }).strict();
+/** The owner's reply to a close by votes (#your-decisions): their side, with the evidence. */
+export const respondToCloseSchema = z.object({ evidence: evidenceField }).strict();
 
 export const withdrawIssueSchema = z
   .object({
@@ -490,19 +490,6 @@ export async function reopenIssue(agent: AgentContext, projectId: string, issueR
   return result;
 }
 
-/**
- * Whether the owner has appealed a close on this issue before (#your-decisions).
- * An issue takes one appeal: once an appeal has reopened it, a later close by
- * votes is final, so voters are not asked to vote on the same close again and again.
- */
-export async function hasAppealed(bugId: string, db: Db = prisma): Promise<boolean> {
-  const appeal = await db.bugActivity.findFirst({
-    where: { bugId, type: "status_changed", metadata: { path: ["via"], equals: "appealed" } },
-    select: { id: true },
-  });
-  return appeal !== null;
-}
-
 /** The issue's owner (its reporter or the person it is for), answering a close in the web app (#your-decisions). */
 export type IssueOwner = { tenantId: string; userId: string };
 
@@ -515,66 +502,39 @@ async function ownersClosedIssue(tx: Prisma.TransactionClient, owner: IssueOwner
     ? await tx.closeSuggestion.count({ where: { bugId, reason: fresh.closeReason, onBehalfOfUserId: { not: owner.userId } } })
     : 0;
   if (othersVoted === 0) {
-    const message = "Only an issue closed by other members' votes can be appealed or agreed with.";
+    const message = "Only an issue closed by other members' votes can be answered or agreed with.";
     throw new IssueApiError(409, message, { error: "not_appealable", message, status: fresh.status, closeReason: fresh.closeReason });
   }
   return fresh;
 }
 
 /**
- * The owner appeals a close by other members' votes (#your-decisions): the
- * issue goes back to Open (or Requires confirmation if it never was
- * confirmed), a duplicate link is cleared, and the suggestions for the
- * reason it closed with are removed, so closing it again takes a fresh vote.
- * The owner's evidence is posted as a comment on the issue for the voters to
- * weigh, and recorded with the status change. One appeal per issue
- * (`hasAppealed`): a second is 409 already_appealed.
+ * The owner answers a close by other members' votes (#your-decisions): their
+ * side, with the evidence, posted as a comment on the issue. The voters and
+ * the issue's watchers are told. It changes nothing else: a close stays
+ * final, and only a not-reproducible one can be reopened, by a manager agent
+ * with the fresh reproduction (`reopenIssue`).
  */
-export async function appealClose(owner: IssueOwner, projectId: string, issueRef: string, input: z.infer<typeof appealCloseSchema>) {
+export async function respondToClose(owner: IssueOwner, projectId: string, issueRef: string, input: z.infer<typeof respondToCloseSchema>) {
   const bug = await issueInProject(owner.tenantId, projectId, issueRef);
   const result = await prisma.$transaction(async (tx) => {
     const fresh = await ownersClosedIssue(tx, owner, bug.id);
-    if (await hasAppealed(bug.id, tx)) {
-      const message = "This issue was appealed once already, so this close is final.";
-      throw new IssueApiError(409, message, { error: "already_appealed", message });
-    }
-    const to: Substatus = (await isConfirmed(bug.id, tx)) ? "open" : "requires_confirmation";
-    const previousReason = fresh.closeReason;
-    await tx.bug.update({
-      where: { id: bug.id },
-      data: { ...moveTo(to), closeReason: null, closeEvidence: null, closedAt: null, closeAgreedAt: null, duplicateOfId: null },
+    const voters = await tx.closeSuggestion.findMany({
+      where: { bugId: bug.id, reason: fresh.closeReason!, onBehalfOfUserId: { not: owner.userId } },
+      select: { onBehalfOfUserId: true },
     });
-    const voters = await tx.closeSuggestion.findMany({ where: { bugId: bug.id, reason: fresh.closeReason! }, select: { onBehalfOfUserId: true } });
-    const { count: clearedSuggestions } = await tx.closeSuggestion.deleteMany({ where: { bugId: bug.id, reason: fresh.closeReason! } });
     const comment = await tx.comment.create({
-      data: { bugId: bug.id, authorId: owner.userId, summary: "Appeal against the close.", body: input.evidence },
+      data: { bugId: bug.id, authorId: owner.userId, summary: "Reply to the close.", body: input.evidence },
       select: { id: true },
-    });
-    await tx.bugActivity.create({
-      data: {
-        bugId: bug.id,
-        actorId: owner.userId,
-        type: "status_changed",
-        summary: statusChangedSummary("closed", to),
-        metadata: { field: "status", from: "closed", to, via: "appealed", previousReason, evidence: input.evidence, commentId: comment.id },
-      },
-    });
-    await publish(tx, {
-      tenantId: owner.tenantId,
-      type: "issue.reopened",
-      actorAgentId: null,
-      bugId: bug.id,
-      projectId,
-      payload: { issueId: bug.id, issueNumber: bug.number, from: "closed", to, previousReason, evidence: input.evidence, via: "appealed" },
     });
     const ownerRow = await tx.user.findUnique({ where: { id: owner.userId }, select: { name: true } });
     const issue = await tx.bug.findUnique({ where: { id: bug.id }, select: { title: true } });
     return {
-      issueId: bug.id, issueNumber: bug.number, ...moveTo(to), previousReason, clearedSuggestions, commentId: comment.id,
+      issueId: bug.id, issueNumber: bug.number, commentId: comment.id, closeReason: fresh.closeReason,
       notice: { voterIds: voters.map((voter) => voter.onBehalfOfUserId), ownerName: ownerRow?.name ?? "The owner", title: issue?.title ?? "" },
     };
   });
-  // The voters and the issue's watchers see the appeal like any comment (#your-decisions).
+  // The voters and the issue's watchers see the reply like any comment.
   const { notice, ...response } = result;
   notifyLater({
     kind: "comment_added",
@@ -586,7 +546,6 @@ export async function appealClose(owner: IssueOwner, projectId: string, issueRef
     excerpt: input.evidence.slice(0, 200),
     recipientIds: notice.voterIds,
   });
-  // A person's appeal is kept in the event and the issue's history, not the agent audit log.
   return response;
 }
 

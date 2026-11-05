@@ -64,7 +64,7 @@ export function DecisionCard({ issueId, decision }: { issueId: string; decision:
           </>
         ) : null}
       </dl>
-      <DecisionActions issueId={issueId} canAppeal={decision.canAppeal} />
+      <DecisionActions issueId={issueId} reopenable={decision.reopenable} />
     </section>
   );
 }

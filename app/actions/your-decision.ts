@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth-helpers";
 import { currentTenantIdFor } from "@/lib/tenant-context";
 import { revalidateIssue } from "@/lib/revalidate-issue";
-import { agreeWithClose, appealClose, appealCloseSchema } from "@/lib/agent-api/close-suggestions";
+import { agreeWithClose, respondToClose, respondToCloseSchema } from "@/lib/agent-api/close-suggestions";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import { ACTION_RATE_LIMITS, consumeRateLimit, RATE_LIMIT_MESSAGE } from "@/lib/rate-limit";
 
@@ -36,16 +36,17 @@ async function run(kind: string, userId: string, fn: () => Promise<unknown>): Pr
 
 /**
  * "Respond or appeal" on the decision card (#your-decisions): the issue's
- * owner answers a close by other members' votes with their evidence, which
- * reopens the vote (lib/agent-api/close-suggestions.ts, `appealClose`).
+ * owner answers a close by other members' votes with their evidence, posted
+ * as a comment the voters are told about (lib/agent-api/close-suggestions.ts,
+ * `respondToClose`). The close itself stays as it is.
  */
-export async function appealCloseAction(issueId: string, evidence: string): Promise<DecisionActionResult> {
+export async function respondToCloseAction(issueId: string, evidence: string): Promise<DecisionActionResult> {
   const user = await requireUser();
-  const parsed = appealCloseSchema.safeParse({ evidence: typeof evidence === "string" ? evidence.trim() : evidence });
-  if (!parsed.success) return { error: "Say why it should stay open, with your evidence." };
+  const parsed = respondToCloseSchema.safeParse({ evidence: typeof evidence === "string" ? evidence.trim() : evidence });
+  if (!parsed.success) return { error: "Say why you disagree, with your evidence." };
   const issue = await viewersIssue(user.id, issueId);
   if (!issue) return { error: "Issue not found" };
-  return run("appeal", user.id, () => appealClose({ tenantId: issue.tenantId, userId: user.id }, issue.projectId, issue.id, parsed.data));
+  return run("respond", user.id, () => respondToClose({ tenantId: issue.tenantId, userId: user.id }, issue.projectId, issue.id, parsed.data));
 }
 
 /** "I agree" on the decision card (#your-decisions): the owner accepts the close, and the card folds away. */
