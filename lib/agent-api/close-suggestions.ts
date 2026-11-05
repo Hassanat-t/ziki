@@ -25,6 +25,9 @@ import {
   type VotedCloseReason,
 } from "@/lib/close-reasons";
 import { moveTo } from "@/lib/issue-substatus";
+import { notifyLater } from "@/lib/notify";
+import { decisionNote } from "@/lib/your-decision";
+import { logger } from "@/lib/logger";
 
 /**
  * Closing an issue (#close-superseded, #close-reasons). Any agent that
@@ -87,6 +90,8 @@ export const closeIssueSchema = z
 
 /** The fresh reproduction that reopens an issue closed as not reproducible, e.g. a new request id. */
 export const reopenIssueSchema = z.object({ evidence: evidenceField }).strict();
+/** The owner's appeal against a close by votes (#your-decisions): their side, with the evidence. */
+export const appealCloseSchema = z.object({ evidence: evidenceField }).strict();
 
 export const withdrawIssueSchema = z
   .object({
@@ -173,10 +178,13 @@ export async function suggestClose(agent: AgentContext, projectId: string, issue
   const workflow = await workflowFor(projectId);
   const { closeThreshold } = workflow;
   const weight = voteWeight(agent.level, workflow.managerVoteWeight);
+  // The status before the close, for the owner's notice (#your-decisions).
+  let from: Status = "open";
 
   const result = await prisma.$transaction(async (tx) => {
     const fresh = await lockedIssue(tx, bug.id);
     const duplicateOfId = input.duplicateOf !== undefined ? await duplicateTarget(tx, agent.tenantId, bug.id, input.duplicateOf) : null;
+    from = fresh.status;
     const fields = {
       reason: input.reason,
       votes: weight,
@@ -225,8 +233,52 @@ export async function suggestClose(agent: AgentContext, projectId: string, issue
       { reason: result.reason, evidence: input.evidence, votes: result.votes, threshold: result.threshold, via: "threshold", releasedClaimIds: result.releasedClaimIds },
       { bugId: bug.id },
     );
+    await tellOwnerOfDecision(agent, bug.id, from, {
+      reason: result.reason, evidence: input.evidence, votes: result.votes, threshold: result.threshold,
+    });
   }
   return result;
+}
+
+/**
+ * Tells the issue's owner that other people's votes closed it
+ * (#your-decisions): a status-changed notice to its watchers, the reporter
+ * first, whose note says what was decided, by how many votes and with what
+ * evidence. The voter whose agent closed it is not told about their own act.
+ * A failure here never undoes the close.
+ */
+async function tellOwnerOfDecision(
+  agent: AgentContext,
+  bugId: string,
+  from: Status,
+  decision: { reason: string; evidence: string | null; votes?: number; threshold?: number },
+) {
+  try {
+    const bug = await prisma.bug.findUnique({
+      where: { id: bugId },
+      select: { title: true, reporterId: true, duplicateOf: { select: { number: true, title: true } } },
+    });
+    if (!bug) return;
+    notifyLater({
+      kind: "status_changed",
+      actorId: agent.ownerId,
+      actorName: agent.name,
+      bugId,
+      bugTitle: bug.title,
+      reporterId: bug.reporterId,
+      from,
+      to: "closed",
+      note: decisionNote({
+        reason: decision.reason,
+        duplicateOf: bug.duplicateOf,
+        votes: decision.votes,
+        threshold: decision.threshold,
+        evidence: decision.evidence,
+      }),
+    });
+  } catch (error) {
+    logger.error("[close] owner notice failed", { bugId, error });
+  }
 }
 
 function duplicateRefused(error: unknown): never {
@@ -282,6 +334,7 @@ async function closeInTransaction(
       closeReason: reason,
       closeEvidence: evidence,
       closedAt: now,
+      closeAgreedAt: null,
       // A finished issue shouldn't stay pinned above open work (#256).
       ...(fresh.isBoosted ? { isBoosted: false, boostedAt: null } : {}),
     },
@@ -349,9 +402,11 @@ export async function closeIssue(agent: AgentContext, projectId: string, issueRe
   const bug = await issueInProject(agent.tenantId, projectId, issueRef);
   const { closeThreshold } = await workflowFor(projectId);
   const reason: VotedCloseReason = input.reason;
+  let from: Status = "open";
 
   const result = await prisma.$transaction(async (tx) => {
     const fresh = await lockedIssue(tx, bug.id);
+    from = fresh.status;
     const votes = await closeTally(bug.id, reason, tx);
     if (votes < closeThreshold) {
       const message = `${votes} of ${closeThreshold} votes suggest closing this issue as ${closeReasonLabel(reason)}; it can be closed for that reason once they reach the threshold.`;
@@ -374,6 +429,9 @@ export async function closeIssue(agent: AgentContext, projectId: string, issueRe
     };
   });
   await audit(agent, "issue.closed", `issue:${bug.id}`, { reason, evidence: input.evidence, votes: result.votes, releasedClaimIds: result.releasedClaimIds }, { bugId: bug.id });
+  await tellOwnerOfDecision(agent, bug.id, from, {
+    reason, evidence: input.evidence, votes: result.votes, threshold: result.threshold,
+  });
   return result;
 }
 
@@ -433,6 +491,103 @@ export async function reopenIssue(agent: AgentContext, projectId: string, issueR
 }
 
 /** Who withdraws an issue: a person, through one of their agents or in the web app. */
+export type IssueOwner = { tenantId: string; userId: string };
+
+/** The closed issue the owner may answer: closed by votes, not withdrawn, and theirs (404 otherwise). */
+async function ownersClosedIssue(tx: Prisma.TransactionClient, owner: IssueOwner, bugId: string) {
+  const fresh = await lockedRow(tx, bugId);
+  if (!ownsIssue(fresh, owner.userId)) throw new IssueApiError(403, "Only the person this issue belongs to can answer its close.", { error: "not_owner" });
+  if (fresh.status !== "closed" || !fresh.closeReason || fresh.closeReason === "withdrawn") {
+    const message = "Only an issue closed by other members' votes can be appealed or agreed with.";
+    throw new IssueApiError(409, message, { error: "not_appealable", message, status: fresh.status, closeReason: fresh.closeReason });
+  }
+  return fresh;
+}
+
+/**
+ * The owner appeals a close by other members' votes (#your-decisions): the
+ * issue goes back to Open (or Requires confirmation if it never was
+ * confirmed), a duplicate link is cleared, and the suggestions for the
+ * reason it closed with are removed, so closing it again takes a fresh vote.
+ * The owner's evidence is posted as a comment on the issue for the voters to
+ * weigh, and recorded with the status change.
+ */
+export async function appealClose(owner: IssueOwner, projectId: string, issueRef: string, input: z.infer<typeof appealCloseSchema>) {
+  const bug = await issueInProject(owner.tenantId, projectId, issueRef);
+  const result = await prisma.$transaction(async (tx) => {
+    const fresh = await ownersClosedIssue(tx, owner, bug.id);
+    const to: Substatus = (await isConfirmed(bug.id, tx)) ? "open" : "requires_confirmation";
+    const previousReason = fresh.closeReason;
+    await tx.bug.update({
+      where: { id: bug.id },
+      data: { ...moveTo(to), closeReason: null, closeEvidence: null, closedAt: null, closeAgreedAt: null, duplicateOfId: null },
+    });
+    const voters = await tx.closeSuggestion.findMany({ where: { bugId: bug.id, reason: fresh.closeReason! }, select: { onBehalfOfUserId: true } });
+    const { count: clearedSuggestions } = await tx.closeSuggestion.deleteMany({ where: { bugId: bug.id, reason: fresh.closeReason! } });
+    const comment = await tx.comment.create({
+      data: { bugId: bug.id, authorId: owner.userId, summary: "Appeal against the close.", body: input.evidence },
+      select: { id: true },
+    });
+    await tx.bugActivity.create({
+      data: {
+        bugId: bug.id,
+        actorId: owner.userId,
+        type: "status_changed",
+        summary: statusChangedSummary("closed", to),
+        metadata: { field: "status", from: "closed", to, via: "appealed", previousReason, evidence: input.evidence, commentId: comment.id },
+      },
+    });
+    await publish(tx, {
+      tenantId: owner.tenantId,
+      type: "issue.reopened",
+      actorAgentId: null,
+      bugId: bug.id,
+      projectId,
+      payload: { issueId: bug.id, issueNumber: bug.number, from: "closed", to, previousReason, evidence: input.evidence, via: "appealed" },
+    });
+    const ownerRow = await tx.user.findUnique({ where: { id: owner.userId }, select: { name: true } });
+    const issue = await tx.bug.findUnique({ where: { id: bug.id }, select: { title: true } });
+    return {
+      issueId: bug.id, issueNumber: bug.number, ...moveTo(to), previousReason, clearedSuggestions, commentId: comment.id,
+      notice: { voterIds: voters.map((voter) => voter.onBehalfOfUserId), ownerName: ownerRow?.name ?? "The owner", title: issue?.title ?? "" },
+    };
+  });
+  // The voters and the issue's watchers see the appeal like any comment (#your-decisions).
+  const { notice, ...response } = result;
+  notifyLater({
+    kind: "comment_added",
+    actorId: owner.userId,
+    actorName: notice.ownerName,
+    bugId: bug.id,
+    bugTitle: notice.title,
+    commentId: response.commentId,
+    excerpt: input.evidence.slice(0, 200),
+    recipientIds: notice.voterIds,
+  });
+  // A person's appeal is kept in the event and the issue's history, not the agent audit log.
+  return response;
+}
+
+/** The owner agrees with a close by other members' votes (#your-decisions): the decision card folds away. */
+export async function agreeWithClose(owner: IssueOwner, projectId: string, issueRef: string) {
+  const bug = await issueInProject(owner.tenantId, projectId, issueRef);
+  return prisma.$transaction(async (tx) => {
+    const fresh = await ownersClosedIssue(tx, owner, bug.id);
+    const agreedAt = new Date();
+    await tx.bug.update({ where: { id: bug.id }, data: { closeAgreedAt: agreedAt } });
+    await tx.bugActivity.create({
+      data: {
+        bugId: bug.id,
+        actorId: owner.userId,
+        type: "edited",
+        summary: "agreed with the close",
+        metadata: { field: "closeAgreedAt", to: agreedAt.toISOString(), reason: fresh.closeReason },
+      },
+    });
+    return { issueId: bug.id, issueNumber: bug.number, agreedAt };
+  });
+}
+
 export type IssueWithdrawer = { tenantId: string; userId: string; agentId: string | null; agentName: string | null };
 
 /**
