@@ -362,6 +362,16 @@ describe("telling the owner about a close by votes (#your-decisions)", () => {
     expect(notice.note).toContain(notPlanned.evidence);
   });
 
+  it("tells nobody when the owner's own votes closed it: there is no decision by others to show", async () => {
+    vi.mocked(workflowFor).mockResolvedValueOnce({ governance: "threshold", closeThreshold: 3, managerVoteWeight: 2 } as never);
+    db.closeSuggestion.aggregate.mockResolvedValueOnce({ _sum: { votes: 3 } });
+    db.closeSuggestion.count.mockResolvedValueOnce(0);
+    const result = await suggestClose(voter, "p1", "7", notPlanned);
+    expect(result.closed).toBe(true);
+    expect(db.closeSuggestion.count).toHaveBeenCalledWith({ where: { bugId: "bug1", reason: "not_planned", onBehalfOfUserId: { notIn: ["ada", "ada"] } } });
+    expect(notifyLater).not.toHaveBeenCalled();
+  });
+
   it("tells nobody while the votes are still below the threshold", async () => {
     vi.mocked(workflowFor).mockResolvedValueOnce({ governance: "threshold", closeThreshold: 3, managerVoteWeight: 2 } as never);
     db.closeSuggestion.aggregate.mockResolvedValueOnce({ _sum: { votes: 1 } });

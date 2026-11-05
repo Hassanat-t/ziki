@@ -244,8 +244,10 @@ export async function suggestClose(agent: AgentContext, projectId: string, issue
  * Tells the issue's owner that other people's votes closed it
  * (#your-decisions): a status-changed notice to its watchers, the reporter
  * first, whose note says what was decided, by how many votes and with what
- * evidence. The voter whose agent closed it is not told about their own act.
- * A failure here never undoes the close.
+ * evidence. Sent only when someone other than the owner voted for the reason,
+ * the same rule as the decision card, so the notice never points the owner
+ * at a card that isn't there. The voter whose agent closed it is not told
+ * about their own act. A failure here never undoes the close.
  */
 async function tellOwnerOfDecision(
   agent: AgentContext,
@@ -256,9 +258,13 @@ async function tellOwnerOfDecision(
   try {
     const bug = await prisma.bug.findUnique({
       where: { id: bugId },
-      select: { title: true, reporterId: true, duplicateOf: { select: { number: true, title: true } } },
+      select: { title: true, reporterId: true, beneficiaryUserId: true, duplicateOf: { select: { number: true, title: true } } },
     });
     if (!bug) return;
+    const othersVoted = await prisma.closeSuggestion.count({
+      where: { bugId, reason: decision.reason, onBehalfOfUserId: { notIn: [bug.reporterId, bug.beneficiaryUserId] } },
+    });
+    if (othersVoted === 0) return;
     notifyLater({
       kind: "status_changed",
       actorId: agent.ownerId,
