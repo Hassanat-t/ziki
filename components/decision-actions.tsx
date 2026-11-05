@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { agreeWithCloseAction, respondToCloseAction } from "@/app/actions/your-decision";
 
 /**
- * The decision card's answers (#your-decisions): "Respond or appeal" opens a
+ * The decision card's answers (#your-decisions): "Respond" opens a
  * box for the owner's side and evidence, posted as a comment the voters are
  * told about; "I agree" accepts the close.
  */
@@ -49,7 +49,7 @@ export function DecisionActions({ issueId, reopenable }: { issueId: string; reop
           <button
             type="submit"
             disabled={pending || !evidence.trim()}
-            className="rounded-full bg-zk-accent px-3.5 py-1.5 text-[13px] font-bold text-white hover:opacity-90 disabled:opacity-50"
+            className="rounded-full bg-electric-blue-strong px-3.5 py-1.5 text-[13px] font-bold text-white hover:opacity-90 disabled:opacity-50"
           >
             {pending ? "Sending…" : "Send"}
           </button>
@@ -77,9 +77,9 @@ export function DecisionActions({ issueId, reopenable }: { issueId: string; reop
         <button
           type="button"
           onClick={() => setAppealing(true)}
-          className="rounded-full bg-zk-accent px-3.5 py-1.5 text-[13px] font-bold text-white hover:opacity-90"
+          className="rounded-full bg-electric-blue-strong px-3.5 py-1.5 text-[13px] font-bold text-white hover:opacity-90"
         >
-          Respond or appeal
+          Respond
         </button>
         <button
           type="button"

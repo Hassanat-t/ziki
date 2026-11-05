@@ -35,7 +35,7 @@ async function run(kind: string, userId: string, fn: () => Promise<unknown>): Pr
 }
 
 /**
- * "Respond or appeal" on the decision card (#your-decisions): the issue's
+ * "Respond" on the decision card (#your-decisions): the issue's
  * owner answers a close by other members' votes with their evidence, posted
  * as a comment the voters are told about (lib/agent-api/close-suggestions.ts,
  * `respondToClose`). The close itself stays as it is.

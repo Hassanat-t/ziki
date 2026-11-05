@@ -269,7 +269,7 @@ describe("A decision about your work (#your-decisions)", () => {
     render(<DecisionCard issueId="bug1" decision={decide(closed, "alice")!} />);
     await user.click(screen.getByRole("button", { name: "I agree" }));
     expect(decisionActions.agree).toHaveBeenCalledWith("bug1");
-    await user.click(screen.getByRole("button", { name: "Respond or appeal" }));
+    await user.click(screen.getByRole("button", { name: "Respond" }));
     await user.type(screen.getByLabelText(/Your side/), "Mine is about the mobile page; #9 is desktop only.");
     await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(decisionActions.respond).toHaveBeenCalledWith("bug1", "Mine is about the mobile page; #9 is desktop only."));
@@ -279,13 +279,13 @@ describe("A decision about your work (#your-decisions)", () => {
     const user = userEvent.setup({ delay: null });
     const notReproducible = decide({ ...closed, closeReason: "not_reproducible", duplicateOf: null }, "alice", [vote("cara", "Cara", 3, "not_reproducible")])!;
     render(<DecisionCard issueId="bug1" decision={notReproducible} />);
-    await user.click(screen.getByRole("button", { name: "Respond or appeal" }));
+    await user.click(screen.getByRole("button", { name: "Respond" }));
     expect(screen.getByText(/A manager can reopen it with your fresh reproduction/)).toBeInTheDocument();
   });
 
   it("folds to one line once the owner agreed", () => {
     render(<DecisionCard issueId="bug1" decision={decide({ ...closed, closeAgreedAt: new Date("2026-11-05T11:00:00Z") }, "alice")!} />);
     expect(screen.getByTestId("decision-agreed")).toHaveTextContent(/You agreed with this decision/);
-    expect(screen.queryByRole("button", { name: "Respond or appeal" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Respond" })).toBeNull();
   });
 });
